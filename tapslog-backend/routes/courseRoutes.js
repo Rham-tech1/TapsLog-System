@@ -193,10 +193,10 @@ router.post('/invite', async (req, res) => {
     const resolvedTeacherId = teacherRecord.rowCount > 0 ? teacherRecord.rows[0].id : teacher_id;
 
     // 4. Insert or update invitation
-    // NOTE: Table name is "course_invitations" per schema_master.sql
+    // NOTE: Table name is "enrollment_invitations" per schema_master.sql
     // If your Supabase table is named "enrollment_invitations", change both references below.
     await db.query(
-      `INSERT INTO course_invitations (course_id, student_id, invited_by, status, invited_at)
+      `INSERT INTO enrollment_invitations (course_id, student_id, invited_by, status, invited_at)
        VALUES ($1, $2, $3, 'PENDING', NOW())
        ON CONFLICT (course_id, student_id)
        DO UPDATE SET status = 'PENDING', invited_at = NOW()`,
@@ -225,7 +225,7 @@ router.get('/invitations/student/:student_id', async (req, res) => {
       `SELECT ci.id AS invitation_id, ci.invited_at, ci.status,
               c.id AS course_id, c.course_name, c.course_code, c.section, c.time_in, c.time_out, c.day_of_week,
               t.full_name AS teacher_name
-       FROM course_invitations ci
+       FROM enrollment_invitations ci
        JOIN courses c ON ci.course_id = c.id
        JOIN teachers t ON ci.invited_by = t.id
        WHERE ci.student_id = $1 AND ci.status = 'PENDING'
@@ -253,7 +253,7 @@ router.post('/invitations/respond', async (req, res) => {
 
   try {
     const inviteRes = await db.query(
-      `SELECT id, course_id, student_id, status FROM course_invitations WHERE id = $1`,
+      `SELECT id, course_id, student_id, status FROM enrollment_invitations WHERE id = $1`,
       [invitation_id]
     );
 
@@ -272,7 +272,7 @@ router.post('/invitations/respond', async (req, res) => {
       );
 
       await db.query(
-        `UPDATE course_invitations
+        `UPDATE enrollment_invitations
          SET status = 'ACCEPTED', responded_at = NOW()
          WHERE id = $1`,
         [invitation_id]
@@ -281,7 +281,7 @@ router.post('/invitations/respond', async (req, res) => {
       return res.json({ success: true, message: 'Course invitation accepted. You are now enrolled.' });
     } else {
       await db.query(
-        `UPDATE course_invitations
+        `UPDATE enrollment_invitations
          SET status = 'DECLINED', responded_at = NOW()
          WHERE id = $1`,
         [invitation_id]
@@ -310,7 +310,7 @@ router.post('/join', async (req, res) => {
 
   try {
     const courseRes = await db.query(
-      `SELECT id, course_name, course_code, is_join_locked FROM courses WHERE join_code = $1`,
+      `SELECT id, course_name, course_code FROM courses WHERE join_code = $1`,
       [cleanCode]
     );
 
@@ -319,10 +319,6 @@ router.post('/join', async (req, res) => {
     }
 
     const course = courseRes.rows[0];
-
-    if (course.is_join_locked) {
-      return res.status(403).json({ success: false, message: 'Enrollment for this course is currently locked by the instructor.' });
-    }
 
     // Resolve student record (dual: students.id or users.id)
     let studentCheck = await db.query('SELECT id FROM students WHERE id = $1', [student_id]);

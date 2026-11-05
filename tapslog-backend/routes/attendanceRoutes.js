@@ -16,9 +16,10 @@ const hashUid = (rawUid) => {
  * Enforces Option A1 (Primary teacher check).
  */
 router.post('/session/start', async (req, res) => {
-  const { course_id, teacher_id } = req.body;
+  const course_id = req.body.course_id || req.body.courseId;
+  const rawTeacherId = req.body.teacher_id || req.body.teacherId;
 
-  if (!course_id || !teacher_id) {
+  if (!course_id || !rawTeacherId) {
     return res.status(400).json({
       success: false,
       message: 'course_id and teacher_id are required.'
@@ -26,6 +27,16 @@ router.post('/session/start', async (req, res) => {
   }
 
   try {
+    // Dual-resolve teacher_id: accept both teachers.id and users.id (user.id from JWT)
+    let teacher_id = rawTeacherId;
+    const directCheck = await db.query('SELECT id FROM teachers WHERE id = $1', [rawTeacherId]);
+    if (directCheck.rowCount === 0) {
+      const byUserCheck = await db.query('SELECT id FROM teachers WHERE user_id = $1', [rawTeacherId]);
+      if (byUserCheck.rowCount > 0) {
+        teacher_id = byUserCheck.rows[0].id;
+      }
+    }
+
     // 1. Option A1 Observer Verification: Confirm teacher is assigned and is PRIMARY
     const teacherCheck = await db.query(
       `SELECT role FROM course_teachers WHERE course_id = $1 AND teacher_id = $2`,
@@ -145,7 +156,8 @@ router.get('/session/active/:course_id', async (req, res) => {
  * Validates card UID hash, verifies student enrollment, and logs presence.
  */
 router.post('/scan', async (req, res) => {
-  const { card_uid, session_id } = req.body;
+  const card_uid = req.body.card_uid || req.body.cardUid;
+  const session_id = req.body.session_id || req.body.sessionId;
 
   if (!card_uid || !session_id) {
     return res.status(400).json({

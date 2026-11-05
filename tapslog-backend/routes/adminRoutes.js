@@ -138,7 +138,7 @@ router.delete('/unbind-card/:userId', async (req, res) => {
     );
 
     if (cardRes.rowCount === 0) {
-      return res.status(400).json({ success: false, message: 'User does not possess an active NFC card.' });
+      return res.status(404).json({ success: false, message: 'User does not possess an active NFC card.' });
     }
 
     // 3. Clear nfc_card_id from users table
@@ -174,25 +174,27 @@ router.delete('/unbind-card/:userId', async (req, res) => {
  * Elevates or demotes a user's role.
  */
 router.patch('/user-role', async (req, res) => {
-  const { target_user_id, new_role } = req.body;
+  const { target_user_id, new_role, user_id, userId, role } = req.body;
+  const resolvedTargetId = target_user_id || user_id || userId;
+  const resolvedRole = new_role || role;
   const adminId = req.user.id;
 
-  if (!target_user_id || !new_role) {
+  if (!resolvedTargetId || !resolvedRole) {
     return res.status(400).json({ success: false, message: 'target_user_id and new_role are required.' });
   }
 
   const validRoles = ['STUDENT', 'TEACHER', 'ADMIN'];
-  if (!validRoles.includes(new_role)) {
+  if (!validRoles.includes(resolvedRole.toUpperCase())) {
     return res.status(400).json({ success: false, message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
   }
 
   try {
     // Prevent admin demoting themselves directly to avoid lockouts
-    if (target_user_id === adminId && new_role !== 'ADMIN') {
+    if (resolvedTargetId === adminId && resolvedRole.toUpperCase() !== 'ADMIN') {
       return res.status(400).json({ success: false, message: 'Admins cannot remove their own administrative privileges.' });
     }
 
-    const currentRes = await db.query('SELECT role, email FROM users WHERE id = $1', [target_user_id]);
+    const currentRes = await db.query('SELECT role, email FROM users WHERE id = $1', [resolvedTargetId]);
     if (currentRes.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
@@ -202,7 +204,7 @@ router.patch('/user-role', async (req, res) => {
     // Update role
     await db.query(
       'UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2',
-      [new_role, target_user_id]
+      [resolvedRole.toUpperCase(), resolvedTargetId]
     );
 
     // Audit log
@@ -211,14 +213,14 @@ router.patch('/user-role', async (req, res) => {
        VALUES ($1, 'UPDATE_USER_ROLE', $2, $3)`,
       [
         adminId,
-        target_user_id,
-        JSON.stringify({ old_role: oldRole, new_role: new_role })
+        resolvedTargetId,
+        JSON.stringify({ old_role: oldRole, new_role: resolvedRole.toUpperCase() })
       ]
     );
 
     return res.json({
       success: true,
-      message: `User role updated from ${oldRole} to ${new_role}.`
+      message: `User role updated from ${oldRole} to ${resolvedRole.toUpperCase()}.`
     });
   } catch (error) {
     console.error('[Admin Update Role Error]:', error);

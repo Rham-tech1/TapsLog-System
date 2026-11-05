@@ -48,7 +48,7 @@ router.get('/my-membership', async (req, res) => {
   try {
     // Check membership table
     const membershipRes = await db.query(
-      `SELECT id FROM rso_memberships WHERE user_id = $1 AND is_active = TRUE LIMIT 1`,
+      `SELECT id FROM rso_memberships WHERE user_id = $1 LIMIT 1`,
       [user_id]
     );
 
@@ -73,7 +73,7 @@ router.get('/my-membership', async (req, res) => {
  * Body: { name, abbreviation, description, department, advisor_passcode? }
  */
 router.post('/create', async (req, res) => {
-  const { name, abbreviation, description, department, advisor_passcode } = req.body;
+  const { name, abbreviation, description, advisor_passcode } = req.body;
 
   if (!name || !abbreviation) {
     return res.status(400).json({ success: false, message: 'name and abbreviation are required.' });
@@ -81,14 +81,13 @@ router.post('/create', async (req, res) => {
 
   try {
     const rsoRes = await db.query(
-      `INSERT INTO rso_entities (name, abbreviation, description, department, advisor_passcode)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO rso_entities (name, abbreviation, description, advisor_passcode)
+       VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [
         name.trim(),
         abbreviation.trim().toUpperCase(),
         description || '',
-        department || '',
         advisor_passcode || null
       ]
     );
@@ -140,9 +139,9 @@ router.post('/:rso_id/assign-advisor', async (req, res) => {
 
     // Upsert into memberships as Adviser
     await db.query(
-      `INSERT INTO rso_memberships (rso_id, user_id, position, is_active, joined_at)
-       VALUES ($1, $2, 'Adviser', TRUE, NOW())
-       ON CONFLICT (rso_id, user_id) DO UPDATE SET position = 'Adviser', is_active = TRUE`,
+      `INSERT INTO rso_memberships (rso_id, user_id, position, joined_at)
+       VALUES ($1, $2, 'Adviser', NOW())
+       ON CONFLICT (rso_id, user_id) DO UPDATE SET position = 'Adviser'`,
       [rso_id, user_id]
     );
 
@@ -194,9 +193,9 @@ router.post('/:rso_id/claim-advisor', async (req, res) => {
     await db.query('UPDATE rso_entities SET advisor_id = $1 WHERE id = $2', [user_id, rso_id]);
 
     await db.query(
-      `INSERT INTO rso_memberships (rso_id, user_id, position, is_active, joined_at)
-       VALUES ($1, $2, 'Adviser', TRUE, NOW())
-       ON CONFLICT (rso_id, user_id) DO UPDATE SET position = 'Adviser', is_active = TRUE`,
+      `INSERT INTO rso_memberships (rso_id, user_id, position, joined_at)
+       VALUES ($1, $2, 'Adviser', NOW())
+       ON CONFLICT (rso_id, user_id) DO UPDATE SET position = 'Adviser'`,
       [rso_id, user_id]
     );
 
@@ -394,6 +393,101 @@ router.post('/events/:event_id/scan', async (req, res) => {
   } catch (error) {
     console.error('[RSO Event Scan Error]:', error);
     return res.status(500).json({ success: false, message: 'Failed to record event attendance tap.' });
+  }
+});
+
+
+
+// ============================================================
+// FLAT-PATH ALIASES — for Postman compatibility
+// Postman calls these without /:rso_id prefix, passing rso_id in body/query
+// ============================================================
+
+/** POST /api/rso/assign-advisor  (flat alias for POST /:rso_id/assign-advisor) */
+router.post('/assign-advisor', async (req, res) => {
+  const rso_id = req.body.rso_id || req.query.rso_id;
+  if (!rso_id) {
+    return res.status(400).json({ success: false, message: 'rso_id is required in body or query.' });
+  }
+  const { user_id } = req.body;
+  if (!user_id) return res.status(400).json({ success: false, message: 'user_id is required.' });
+  try {
+    const userCheck = await db.query(
+      `SELECT u.role, t.full_name FROM users u
+       LEFT JOIN teachers t ON u.id = t.user_id
+       WHERE u.id = $1`,
+      [user_id]
+    );
+    if (userCheck.rowCount === 0) return res.status(404).json({ success: false, message: 'User not found.' });
+    if (userCheck.rows[0].role !== 'TEACHER') {
+      return res.status(403).json({ success: false, message: 'Only faculty accounts can be assigned as RSO advisors.' });
+    }
+    await db.query('UPDATE rso_entities SET advisor_id = $1 WHERE id = $2', [user_id, rso_id]);
+    await db.query(
+      `INSERT INTO rso_memberships (rso_id, user_id, position, joined_at)
+       VALUES ($1, $2, 'Adviser', NOW())
+       ON CONFLICT (rso_id, user_id) DO UPDATE SET position = 'Adviser'`,
+      [rso_id, user_id]
+    );
+    const name = userCheck.rows[0].full_name || 'Faculty';
+    return res.json({ success: true, message: `${name} assigned as RSO Advisor successfully.` });
+  } catch (error) {
+    console.error('[Assign Advisor Flat Error]:', error);
+    return res.status(500).json({ success: false, message: 'Failed to assign advisor.' });
+  }
+});
+
+/** GET /api/rso/hierarchy  (flat alias for GET /:rso_id/hierarchy) */
+router.get('/hierarchy', async (req, res) => {
+  const rso_id = req.query.rso_id || req.body.rso_id;
+  if (!rso_id) return res.status(400).json({ success: false, message: 'rso_id is required as a query parameter.' });
+  try {
+    const hierarchyRes = await db.query(
+      `SELECT m.id AS membership_id, m.position, m.joined_at,
+              u.id AS user_id, u.email, u.role,
+              COALESCE(t.full_name, s.full_name, 'Member') AS full_name,
+              s.student_id AS student_number, s.program
+       FROM rso_memberships m
+       JOIN users u ON m.user_id = u.id
+       LEFT JOIN teachers t ON u.id = t.user_id
+       LEFT JOIN students s ON u.id = s.user_id
+       WHERE m.rso_id = $1
+       ORDER BY
+         CASE m.position
+           WHEN 'Adviser' THEN 1
+           WHEN 'President' THEN 2
+           WHEN 'Vice President' THEN 3
+           WHEN 'Committee Head' THEN 4
+           WHEN 'Member' THEN 5
+           ELSE 6
+         END ASC,
+         m.joined_at ASC`,
+      [rso_id]
+    );
+    return res.json({ success: true, hierarchy: hierarchyRes.rows });
+  } catch (error) {
+    console.error('[Hierarchy Flat Error]:', error);
+    return res.status(500).json({ success: false, message: 'Failed to load organizational hierarchy.' });
+  }
+});
+
+/** POST /api/rso/events/create  (flat alias for POST /:rso_id/events) */
+router.post('/events/create', async (req, res) => {
+  const { rso_id, name, description, event_date, event_time, location, created_by } = req.body;
+  if (!rso_id || !name || !event_date || !created_by) {
+    return res.status(400).json({ success: false, message: 'rso_id, name, event_date, and created_by are required.' });
+  }
+  try {
+    const eventRes = await db.query(
+      `INSERT INTO rso_events (rso_id, name, description, event_date, event_time, location, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [rso_id, name, description || '', event_date, event_time || null, location || '', created_by]
+    );
+    return res.status(201).json({ success: true, event: eventRes.rows[0] });
+  } catch (error) {
+    console.error('[Create Event Flat Error]:', error);
+    return res.status(500).json({ success: false, message: 'Failed to create event.' });
   }
 });
 
