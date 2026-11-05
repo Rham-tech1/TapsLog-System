@@ -1,0 +1,60 @@
+# TapsLog — Smart NFC Attendance System
+
+Production-grade, hardware-integrated attendance management system featuring AES-256 GCM encrypted NFC card authentication, normalized PostgreSQL scheduling, real-time tap ingestion, and automated report generation.
+
+---
+
+## Technical Architecture & Core Implementation Details
+
+### Phase 1: Security, Cryptography & Database Schema Normalization
+
+1. **AES-256-GCM Hardware Security**
+   - **Encryption Pipeline**: All NFC card UIDs undergo symmetric AES-256-GCM encryption prior to database persistence. Each card record stores the encrypted payload, a unique Initialization Vector (`iv`), and an authentication tag (`auth_tag`).
+   - **In-Memory Decryption Resolution**: Fast scan lookup uses `resolveCardUid` to decrypt active card records dynamically and verify card integrity against incoming physical taps without storing raw card identifiers.
+
+2. **Normalized PostgreSQL Schema design**
+   - Structural decoupling of users, academic sections, hardware credentials, sessions, and logs:
+     - `users`: Core identity registry (`user_id`, `email`, `role`).
+     - `students`: Linked student profiles (`student_id`, `user_id`, `section_id`, `student_number`, `program`).
+     - `sections`: Normalized academic sections (`section_id`, `section_name`).
+     - `nfc_cards`: Security key binding (`card_id`, `student_id`, `teacher_id`, `encrypted_card_uid`, `iv`, `auth_tag`, `status`).
+     - `attendance_sessions`: Master timetable tracking (`session_id`, `teacher_id`, `section_id`, `scheduled_start`, `scheduled_end`, `status`).
+     - `attendance_records`: Event logs (`record_id`, `session_id`, `student_id`, `scanned_at`, `status`).
+     - `nfc_scan_logs`: Immutable security audit logs (`log_id`, `session_id`, `card_id`, `scan_result`, `message`).
+
+---
+
+### Phase 2: Ingestion Scan Engine & Strict Attendance Guardrails
+
+1. **Teacher Control & Session Lifecycle**
+   - **Session Activation**: Pre-scheduled sessions require explicit teacher activation via physical card tap or admin action before student taps are accepted.
+   - **Automated Absence Backfill**: Closing a session updates session status to `CLOSED`, sets incomplete records to `COMPLETED`, auto-populates `ABSENT` status for missing section students, and dispatches an automated HTML summary report.
+
+2. **Automated Student Guardrail Enforcement**
+   - **Section Validation Guardrail**: Validates that student section (`section_id`) matches session section requirements, returning `403 Forbidden` for out-of-section scans.
+   - **Late Threshold Calculation**: Computes time delta against `scheduled_start + late_threshold_minutes` to assign `PRESENT` vs. `LATE` statuses automatically.
+   - **Duplicate Tap Handling**: Initial tap logs `STUDENT_TIME_IN` (`201 Created`). A second tap marks checkout (`STUDENT_TIME_OUT` / `COMPLETED`, `200 OK`). Subsequent taps trigger duplicate prevention (`409 Conflict`).
+
+---
+
+## API Quick Reference
+
+| Endpoint | Method | Description | Guardrail / Response |
+| :--- | :--- | :--- | :--- |
+| `/api/attendance/scan` | `POST` | Primary NFC tap ingestion engine | `200/201` Success, `403` Section Mismatch, `409` Duplicate |
+| `/api/teacher/schedule/:id` | `GET` | Dashboard timetable engine | Returns active, upcoming, and past class schedules |
+
+---
+
+## Environment Setup (`.env`)
+
+```env
+PORT=5000
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_NAME=tapslog_db
+AES_SECRET_KEY=your_32_byte_hex_key
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASS=your_app_password
