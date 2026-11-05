@@ -55,7 +55,8 @@ router.get('/telemetry', async (req, res) => {
  * Returns list of users with search and profile linking.
  */
 router.get('/users', async (req, res) => {
-  const { query, role } = req.query;
+  const searchStr = String(req.query.search || req.query.query || req.query.q || '').trim().toLowerCase();
+  const roleFilter = req.query.role ? String(req.query.role).trim().toUpperCase() : null;
 
   try {
     let sql = `
@@ -71,13 +72,13 @@ router.get('/users', async (req, res) => {
     `;
     const params = [];
 
-    if (role) {
-      params.push(role.toUpperCase());
-      sql += ` AND u.role = $${params.length}`;
+    if (roleFilter) {
+      params.push(roleFilter);
+      sql += " AND u.role = $" + params.length;
     }
 
-    if (query) {
-      params.push(`%${query.toLowerCase()}%`);
+    if (searchStr) {
+      params.push(`%${searchStr}%`);
       sql += ` AND (LOWER(u.email) LIKE $${params.length} 
                  OR LOWER(COALESCE(t.full_name, '')) LIKE $${params.length} 
                  OR LOWER(COALESCE(s.full_name, '')) LIKE $${params.length}
@@ -175,8 +176,8 @@ router.delete('/unbind-card/:userId', async (req, res) => {
  */
 router.patch('/user-role', async (req, res) => {
   const { target_user_id, new_role, user_id, userId, role } = req.body;
-  const resolvedTargetId = target_user_id || user_id || userId;
-  const resolvedRole = new_role || role;
+  const resolvedTargetId = req.body.target_user_id || req.body.user_id || req.body.userId || req.body.id || req.query.target_user_id || req.query.user_id || req.query.userId || req.query.id;
+  const resolvedRole = req.body.new_role || req.body.role || req.body.newRole || req.body.target_role || req.body.targetRole || req.query.new_role || req.query.role;
   const adminId = req.user.id;
 
   if (!resolvedTargetId || !resolvedRole) {

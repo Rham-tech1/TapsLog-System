@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const db = require('../config/db');
+const { decryptCardUid } = require('../utils/security');
 
 /**
  * Utility: Compute SHA-256 hash of raw NFC UID
@@ -302,4 +303,37 @@ router.get('/session/:session_id/logs', async (req, res) => {
   }
 });
 
+
+
+/**
+ * GET /api/attendance/sessions/course/:course_id
+ * Retrieves historical session archive with attendance statistics.
+ */
+router.get('/sessions/course/:course_id', async (req, res) => {
+  const { course_id } = req.params;
+  try {
+    const sessionsRes = await db.query(
+      `SELECT s.id, s.course_id, s.started_at, s.ended_at, s.is_active,
+              COUNT(DISTINCT l.id)::int AS total_taps,
+              COUNT(DISTINCT CASE WHEN l.status = 'PRESENT' THEN l.id END)::int AS present_count,
+              COUNT(DISTINCT CASE WHEN l.status = 'LATE' THEN l.id END)::int AS late_count
+       FROM attendance_sessions s
+       LEFT JOIN attendance_logs l ON s.id = l.session_id
+       WHERE s.course_id = $1
+       GROUP BY s.id
+       ORDER BY s.started_at DESC`,
+      [course_id]
+    );
+
+    return res.json({
+      success: true,
+      sessions: sessionsRes.rows
+    });
+  } catch (error) {
+    console.error('[Get Course Sessions Error]:', error);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve session archive.' });
+  }
+});
+
 module.exports = router;
+

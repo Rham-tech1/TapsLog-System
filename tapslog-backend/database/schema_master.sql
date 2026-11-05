@@ -1,10 +1,10 @@
--- ============================================================
---  TapsLog Master Schema — Phase 3
+﻿-- ============================================================
+--  TapsLog Master Schema â€” Phase 3
 --  University of Assumption Smart Attendance & NFC System
 --
 --  File   : database/schema_master.sql
 --  Author : TapsLog Dev Team
---  Safe   : Fully idempotent — safe to re-run on existing DB
+--  Safe   : Fully idempotent â€” safe to re-run on existing DB
 -- ============================================================
 
 -- Enable UUID generation
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS course_enrollments (
 );
 
 -- ============================================================
--- TABLE 8: enrollment_invitations  [NEW — Phase 3]
+-- TABLE 8: enrollment_invitations  [NEW â€” Phase 3]
 -- GSuite-style teacher-to-student course invitations.
 -- Student accepts/declines from their portal.
 -- ============================================================
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS attendance_sessions (
 -- ============================================================
 -- TABLE 10: attendance_logs
 -- One row per NFC tap event. Linked to session, student, card hash.
--- Uses card_uid_hash for O(1) lookup — no decryption needed.
+-- Uses card_uid_hash for O(1) lookup â€” no decryption needed.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS attendance_logs (
   id              UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -203,7 +203,31 @@ ALTER TABLE rso_memberships
   CHECK (position IN ('Member', 'Committee Head', 'Vice President', 'President', 'Adviser'));
 
 -- ============================================================
--- TABLE 13: rso_events  [NEW — Phase 3]
+-- TABLE 12b: rso_positions [PHASE 3.1 — Two-Tier Hierarchy]
+-- Defines named positions within an RSO with tier classification.
+-- tier: 'EXECUTIVE' (President, VP, Secretary, Treasurer, Auditor)
+--       'COORDINATING' (sub-roles under an executive lead)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS rso_positions (
+  id                UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
+  rso_id            UUID          NOT NULL REFERENCES rso_entities(id) ON DELETE CASCADE,
+  position_title    VARCHAR(100)  NOT NULL,
+  tier              VARCHAR(20)   NOT NULL DEFAULT 'EXECUTIVE'
+                      CHECK (tier IN ('EXECUTIVE', 'COORDINATING')),
+  parent_officer_id UUID          REFERENCES rso_positions(id) ON DELETE SET NULL,
+  holder_user_id    UUID          REFERENCES users(id) ON DELETE SET NULL,
+  is_custom         BOOLEAN       DEFAULT FALSE,
+  sort_order        INT           DEFAULT 99,
+  created_at        TIMESTAMPTZ   DEFAULT NOW()
+);
+ALTER TABLE rso_positions DROP CONSTRAINT IF EXISTS rso_positions_title_rso_unique;
+ALTER TABLE rso_positions ADD CONSTRAINT rso_positions_title_rso_unique UNIQUE (rso_id, position_title);
+
+-- Default executive positions seeded per RSO when created
+CREATE INDEX IF NOT EXISTS idx_rso_positions_rso_id ON rso_positions(rso_id);
+
+-- ============================================================
+-- TABLE 13: rso_events  [NEW â€” Phase 3]
 -- Events organized by an RSO, with NFC attendance terminal.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS rso_events (
@@ -219,7 +243,7 @@ CREATE TABLE IF NOT EXISTS rso_events (
 );
 
 -- ============================================================
--- TABLE 14: rso_event_attendance  [NEW — Phase 3]
+-- TABLE 14: rso_event_attendance  [NEW â€” Phase 3]
 -- NFC tap log for RSO events. One tap per user per event.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS rso_event_attendance (
@@ -232,7 +256,7 @@ CREATE TABLE IF NOT EXISTS rso_event_attendance (
 );
 
 -- ============================================================
--- TABLE 15: admin_audit_logs  [NEW — Phase 3]
+-- TABLE 15: admin_audit_logs  [NEW â€” Phase 3]
 -- Immutable log of every admin action (unbind, role change, etc.)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
@@ -300,7 +324,7 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_time
   ON admin_audit_logs(performed_at DESC);
 
 -- ============================================================
--- SEED DATA — RSO Entities
+-- SEED DATA â€” RSO Entities
 -- (ON CONFLICT = safe to re-run, won't duplicate)
 -- ============================================================
 INSERT INTO rso_entities (name, abbreviation, description, advisor_passcode)
@@ -327,13 +351,13 @@ ON CONFLICT (abbreviation) DO UPDATE
   SET advisor_passcode = EXCLUDED.advisor_passcode;
 
 -- ============================================================
--- SEED DATA — Root Admin Account
+-- SEED DATA â€” Root Admin Account
 --
 -- Email    : admin@ua.edu.ph
 -- Password : TapsAdmin2026!
 --
 -- Hash below is bcrypt (cost 12) of 'TapsAdmin2026!'
--- ⚠️  CHANGE THIS PASSWORD immediately after first login!
+-- âš ï¸  CHANGE THIS PASSWORD immediately after first login!
 -- ============================================================
 INSERT INTO users (email, password_hash, role)
 VALUES (
